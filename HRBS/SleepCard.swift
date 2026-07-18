@@ -48,9 +48,9 @@ struct SleepStagesChart: View {
     /// Lanes from top to bottom, matching Apple Health.
     private let lanes: [SleepStage] = [.awake, .rem, .core, .deep]
 
-    private let laneThickness: CGFloat = 16
+    private let laneThickness: CGFloat = 20
     private let axisHeight: CGFloat = 18
-    private let riserWidth: CGFloat = 5
+    private let riserWidth: CGFloat = 4
 
     var body: some View {
         Canvas { context, size in
@@ -82,19 +82,22 @@ struct SleepStagesChart: View {
                 let yBottom = centerY(lower)
                 let cx = x(b.start)
 
-                let rect = CGRect(x: cx - riserWidth / 2, y: yTop, width: riserWidth, height: yBottom - yTop)
-                let gradient = Gradient(stops: [
-                    .init(color: upper.color.opacity(0.85), location: 0.0),
-                    .init(color: upper.color.opacity(0.22), location: 0.32),
-                    .init(color: lower.color.opacity(0.22), location: 0.68),
-                    .init(color: lower.color.opacity(0.85), location: 1.0),
-                ])
+                // Connect the two lanes' inner edges (not centers), so the riser
+                // tucks under the chunky segments instead of poking out of them.
+                let yStart = min(yTop, yBottom) + laneThickness / 2 - 1
+                let yEnd = max(yTop, yBottom) - laneThickness / 2 + 1
+                guard yEnd > yStart else { continue }
+
+                let rect = CGRect(x: cx - riserWidth / 2, y: yStart, width: riserWidth, height: yEnd - yStart)
+                // A steady two-tone gradient (no fade to white) so even tall
+                // risers read as a clean line rather than a ghostly streak.
+                let gradient = Gradient(colors: [upper.color.opacity(0.55), lower.color.opacity(0.55)])
                 context.fill(
                     Path(roundedRect: rect, cornerRadius: riserWidth / 2),
                     with: .linearGradient(
                         gradient,
-                        startPoint: CGPoint(x: cx, y: yTop),
-                        endPoint: CGPoint(x: cx, y: yBottom)
+                        startPoint: CGPoint(x: cx, y: yStart),
+                        endPoint: CGPoint(x: cx, y: yEnd)
                     )
                 )
             }
@@ -163,8 +166,41 @@ struct SleepStagesChart: View {
     }
 }
 
+#if DEBUG
+extension SleepSession {
+    /// A deliberately fragmented night (frequent brief awakenings, direct
+    /// stage jumps, a long awake block) that mirrors real HealthKit data far
+    /// better than the smooth sample generator — used to stress-test the chart.
+    static var previewFragmented: SleepSession {
+        var comps = DateComponents()
+        comps.year = 2026; comps.month = 7; comps.day = 18; comps.hour = 2; comps.minute = 11
+        let start = Calendar.current.date(from: comps) ?? Date(timeIntervalSince1970: 0)
+
+        var segments: [SleepSegment] = []
+        var cursor = start
+        func add(_ stage: SleepStage, _ minutes: Double) {
+            let end = cursor.addingTimeInterval(minutes * 60)
+            segments.append(SleepSegment(stage: stage, start: cursor, end: end))
+            cursor = end
+        }
+
+        let plan: [(SleepStage, Double)] = [
+            (.awake, 4), (.core, 18), (.deep, 22), (.core, 9), (.deep, 15),
+            (.core, 7), (.awake, 2), (.core, 12), (.rem, 6), (.core, 10),
+            (.deep, 14), (.core, 8), (.awake, 1), (.rem, 5), (.core, 9),
+            (.rem, 4), (.core, 6), (.awake, 2), (.core, 16), (.rem, 12),
+            (.core, 5), (.awake, 55), (.core, 10), (.deep, 7), (.core, 9),
+            (.rem, 16), (.core, 7), (.awake, 2), (.core, 12), (.rem, 9),
+            (.core, 6), (.awake, 3), (.core, 8), (.rem, 5), (.awake, 4),
+        ]
+        for (stage, minutes) in plan { add(stage, minutes) }
+        return SleepSession(segments: segments)
+    }
+}
+#endif
+
 #Preview {
-    SleepCard(session: SampleDataProvider.data(for: Date()).sleep)
+    SleepCard(session: .previewFragmented, age: 30)
         .padding()
         .background(Color.groupedBackground)
 }
