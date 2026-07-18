@@ -58,7 +58,7 @@ private struct MetricTile: View {
                 Image(systemName: status.symbol)
                 Text(status.label)
             }
-            .font(.subheadline.weight(.medium))
+            .font(.footnote.weight(.medium))
             .foregroundStyle(status.color)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
