@@ -19,25 +19,21 @@ struct SleepMetricsGrid: View {
         LazyVGrid(columns: columns, spacing: 18) {
             MetricTile(
                 title: "Sleep Duration",
-                showsInfo: true,
                 value: SleepMetric.durationValue(session.timeAsleep),
                 status: SleepMetric.durationStatus(session.timeAsleep)
             )
             MetricTile(
                 title: "Restorative Sleep",
-                showsInfo: true,
                 value: SleepMetric.durationValue(restorative),
                 status: SleepMetric.restorativeStatus(restorative)
             )
             MetricTile(
                 title: "Fell Asleep At",
-                showsInfo: false,
                 value: SleepMetric.timeValue(session.sleepOnset),
                 status: SleepMetric.fellAsleepStatus(session.sleepOnset)
             )
             MetricTile(
                 title: "Woke Up At",
-                showsInfo: false,
                 value: SleepMetric.timeValue(session.inBedEnd),
                 status: SleepMetric.wokeUpStatus(session.inBedEnd)
             )
@@ -47,22 +43,14 @@ struct SleepMetricsGrid: View {
 
 private struct MetricTile: View {
     let title: String
-    let showsInfo: Bool
     let value: Text
     let status: MetricStatus
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 4) {
-                Text(title)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                if showsInfo {
-                    Image(systemName: "info.circle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            }
+            Text(title)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
 
             value
 
