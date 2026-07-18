@@ -22,6 +22,7 @@ struct SleepCard: View {
 
             SleepStagesChart(session: session)
                 .frame(height: 150)
+                .padding(.top, 10)
 
             SleepOverview(session: session, age: age)
                 .padding(.top, 4)
