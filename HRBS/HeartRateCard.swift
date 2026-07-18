@@ -10,15 +10,11 @@ struct HeartRateCard: View {
             HStack(spacing: 6) {
                 Image(systemName: "heart.fill")
                     .foregroundStyle(.red)
-                Text("Heart Rate")
+                Text("Heart Rate Before Sleep")
                     .font(.headline)
                     .foregroundStyle(.red)
                 Spacer()
             }
-
-            Text("5 minutes before falling asleep")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
 
             if let reading {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
