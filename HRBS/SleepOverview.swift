@@ -51,10 +51,10 @@ struct SleepOverview: View {
 /// the bars read as rounded rectangles rather than pills.
 private let barCornerRadius: CGFloat = 6
 /// Height of the colored bar itself.
-private let barHeight: CGFloat = 16
+private let barHeight: CGFloat = 20
 /// Height reserved for the row; the optimal-range window fills this so it stands
 /// taller than the bar, bracketing it above and below.
-private let windowHeight: CGFloat = 26
+private let windowHeight: CGFloat = 30
 
 private struct StageOverviewRow: View {
     let stage: SleepStage
