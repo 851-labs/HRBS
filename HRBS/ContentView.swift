@@ -4,7 +4,7 @@ import SwiftUI
 /// move between dates, like Calendar), with a date picker in the navigation bar
 /// that stays in sync with the current page.
 struct DashboardView: View {
-    @State private var selectedDate = Calendar.current.startOfDay(for: Date())
+    @State private var scrolledDate: Date? = Calendar.current.startOfDay(for: Date())
     @State private var isShowingDatePicker = false
     @State private var model = DashboardModel()
 
@@ -14,6 +14,9 @@ struct DashboardView: View {
     private static let historyLength = 120
 
     private var today: Date { calendar.startOfDay(for: Date()) }
+
+    /// The day currently on screen (falls back to today between snaps).
+    private var selectedDate: Date { scrolledDate ?? today }
 
     /// Oldest day first, today last, so swiping right goes back in time.
     private var dates: [Date] {
@@ -30,13 +33,19 @@ struct DashboardView: View {
 
     var body: some View {
         NavigationStack {
-            TabView(selection: $selectedDate) {
-                ForEach(dates, id: \.self) { date in
-                    DayPage(date: date, model: model)
-                        .tag(date)
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 0) {
+                    ForEach(dates, id: \.self) { date in
+                        DayPage(date: date, model: model)
+                            .containerRelativeFrame(.horizontal)
+                    }
                 }
+                .scrollTargetLayout()
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $scrolledDate)
+            .scrollIndicators(.hidden)
+            .defaultScrollAnchor(.trailing)
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     dateNavigator
@@ -98,7 +107,9 @@ struct DashboardView: View {
                 "Day",
                 selection: Binding(
                     get: { selectedDate },
-                    set: { selectedDate = calendar.startOfDay(for: $0) }
+                    set: { newValue in
+                        withAnimation { scrolledDate = calendar.startOfDay(for: newValue) }
+                    }
                 ),
                 in: earliestDate...today,
                 displayedComponents: .date
@@ -122,7 +133,7 @@ struct DashboardView: View {
         let day = calendar.startOfDay(for: newDate)
         guard day >= earliestDate, day <= today else { return }
         withAnimation {
-            selectedDate = day
+            scrolledDate = day
         }
     }
 }
