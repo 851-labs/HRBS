@@ -38,98 +38,41 @@ struct SleepCard: View {
     }
 }
 
-/// The sleep-stage timeline, drawn as a connected ribbon to match Apple Health:
-/// each stage is a rounded bar in its own lane (Awake on top, Deep on the
-/// bottom) and consecutive stages are joined by a thin gradient "riser". Swift
-/// Charts has no mark for this, so it's a custom Canvas.
+/// The sleep-stage timeline. The ribbon itself is rendered by the vendored
+/// SleepChartKit `SleepTimelineGraph` (see ThirdParty/SleepChartKit); we wrap it
+/// with our own hour-based dotted axis and feed it our app's stage colors.
 struct SleepStagesChart: View {
     let session: SleepSession
 
-    /// Lanes from top to bottom, matching Apple Health.
-    private let lanes: [SleepStage] = [.awake, .rem, .core, .deep]
-
-    private let laneThickness: CGFloat = 20
     private let axisHeight: CGFloat = 18
-    private let riserWidth: CGFloat = 4
+
+    private var samples: [SleepSample] {
+        session.segments.map {
+            SleepSample(stage: $0.stage.chartStage, startDate: $0.start, endDate: $0.end)
+        }
+    }
 
     var body: some View {
-        Canvas { context, size in
-            let segments = session.segments
-            guard let first = segments.first, let last = segments.last else { return }
-
-            let start = first.start
-            let end = last.end
-            let span = max(end.timeIntervalSince(start), 1)
-
-            let plotHeight = size.height - axisHeight
-            let usable = max(plotHeight - laneThickness, 1)
-            let laneGap = usable / CGFloat(max(lanes.count - 1, 1))
-
-            func laneIndex(_ stage: SleepStage) -> Int { lanes.firstIndex(of: stage) ?? 0 }
-            func centerY(_ stage: SleepStage) -> CGFloat { laneThickness / 2 + CGFloat(laneIndex(stage)) * laneGap }
-            func x(_ date: Date) -> CGFloat { CGFloat(date.timeIntervalSince(start) / span) * size.width }
-
-            drawTimeAxis(context, size: size, start: start, end: end, plotHeight: plotHeight, x: x)
-
-            // Risers first, so the solid segments sit on top of them.
-            for i in 0..<(segments.count - 1) {
-                let a = segments[i], b = segments[i + 1]
-                guard laneIndex(a.stage) != laneIndex(b.stage) else { continue }
-
-                let upper = centerY(a.stage) < centerY(b.stage) ? a.stage : b.stage
-                let lower = centerY(a.stage) < centerY(b.stage) ? b.stage : a.stage
-                let yTop = centerY(upper)
-                let yBottom = centerY(lower)
-                let cx = x(b.start)
-
-                // Connect the two lanes' inner edges (not centers), so the riser
-                // tucks under the chunky segments instead of poking out of them.
-                let yStart = min(yTop, yBottom) + laneThickness / 2 - 1
-                let yEnd = max(yTop, yBottom) - laneThickness / 2 + 1
-                guard yEnd > yStart else { continue }
-
-                let rect = CGRect(x: cx - riserWidth / 2, y: yStart, width: riserWidth, height: yEnd - yStart)
-                // Faintly tinted at each end (where it meets a segment) and
-                // fading to near-white in the middle — Apple Health's pale
-                // "tube" look. Reads clean now that risers tuck under segments.
-                let gradient = Gradient(stops: [
-                    .init(color: upper.color.opacity(0.50), location: 0.0),
-                    .init(color: upper.color.opacity(0.08), location: 0.30),
-                    .init(color: lower.color.opacity(0.08), location: 0.70),
-                    .init(color: lower.color.opacity(0.50), location: 1.0),
-                ])
-                context.fill(
-                    Path(roundedRect: rect, cornerRadius: riserWidth / 2),
-                    with: .linearGradient(
-                        gradient,
-                        startPoint: CGPoint(x: cx, y: yStart),
-                        endPoint: CGPoint(x: cx, y: yEnd)
-                    )
-                )
-            }
-
-            // Solid stage segments.
-            for segment in segments {
-                let x0 = x(segment.start)
-                let width = max(x(segment.end) - x0, riserWidth)
-                let cy = centerY(segment.stage)
-                let rect = CGRect(x: x0, y: cy - laneThickness / 2, width: width, height: laneThickness)
-                context.fill(
-                    Path(roundedRect: rect, cornerRadius: 4, style: .continuous),
-                    with: .color(segment.stage.color)
-                )
+        GeometryReader { geo in
+            let plotHeight = geo.size.height - axisHeight
+            ZStack(alignment: .top) {
+                // Our dotted hour gridlines + labels behind the ribbon.
+                Canvas { context, size in
+                    drawTimeAxis(context, size: size, plotHeight: plotHeight)
+                }
+                // The vendored SleepChartKit ribbon, tinted with our colors.
+                SleepTimelineGraph(samples: samples, colorProvider: HRBSSleepColorProvider())
+                    .frame(height: plotHeight)
             }
         }
     }
 
-    private func drawTimeAxis(
-        _ context: GraphicsContext,
-        size: CGSize,
-        start: Date,
-        end: Date,
-        plotHeight: CGFloat,
-        x: (Date) -> CGFloat
-    ) {
+    private func drawTimeAxis(_ context: GraphicsContext, size: CGSize, plotHeight: CGFloat) {
+        guard let start = session.segments.first?.start,
+              let end = session.segments.last?.end else { return }
+        let span = max(end.timeIntervalSince(start), 1)
+        func x(_ date: Date) -> CGFloat { CGFloat(date.timeIntervalSince(start) / span) * size.width }
+
         let calendar = Calendar.current
 
         // Interior gridlines every two hours, aligned to the clock.
@@ -168,6 +111,32 @@ struct SleepStagesChart: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             context.draw(text, at: CGPoint(x: x(tick), y: labelY), anchor: .center)
+        }
+    }
+}
+
+/// Bridges the vendored `SleepStageColorProvider` to the app's own stage colors.
+private struct HRBSSleepColorProvider: SleepStageColorProvider {
+    func color(for stage: SleepChartStage) -> Color {
+        switch stage {
+        case .awake: return SleepStage.awake.color
+        case .asleepREM: return SleepStage.rem.color
+        case .asleepCore: return SleepStage.core.color
+        case .asleepDeep: return SleepStage.deep.color
+        case .asleepUnspecified: return SleepStage.core.color
+        case .inBed: return .gray
+        }
+    }
+}
+
+private extension SleepStage {
+    /// Maps our stage to the vendored SleepChartKit stage.
+    var chartStage: SleepChartStage {
+        switch self {
+        case .awake: return .awake
+        case .rem: return .asleepREM
+        case .core: return .asleepCore
+        case .deep: return .asleepDeep
         }
     }
 }
