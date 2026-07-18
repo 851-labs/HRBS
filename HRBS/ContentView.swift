@@ -119,15 +119,21 @@ struct DashboardView: View {
                 displayedComponents: .date
             )
             .datePickerStyle(.graphical)
+            .frame(maxHeight: .infinity, alignment: .top)
             .padding(.horizontal)
             .navigationTitle("Select Day")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { isShowingDatePicker = false }
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        // A fixed height that fits the graphical calendar, so UICalendarView
+        // isn't squeezed below its content height (which spams a layout warning).
+        .presentationDetents([.height(460)])
     }
 
     // MARK: - Actions
