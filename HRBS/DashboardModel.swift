@@ -18,7 +18,10 @@ final class DashboardModel {
     #endif
 
     func result(for date: Date) async -> LoadState {
-        #if os(iOS)
+        #if targetEnvironment(simulator)
+        // The simulator has no Health data, so use sample data to exercise the UI.
+        return .loaded(SampleDataProvider.data(for: date))
+        #elseif os(iOS)
         if health.isAvailable {
             await ensureAuthorization()
             if let data = await health.dayData(for: date) {

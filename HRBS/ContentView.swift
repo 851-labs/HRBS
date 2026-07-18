@@ -45,6 +45,11 @@ struct DashboardView: View {
             .scrollTargetBehavior(.paging)
             .scrollPosition(id: $scrolledDate)
             .scrollIndicators(.hidden)
+            #if os(iOS)
+            // Keep the bar compact; a collapsing large title fought the nested
+            // pager's vertical scroll on device.
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     dateNavigator
