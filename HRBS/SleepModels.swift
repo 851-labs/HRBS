@@ -61,6 +61,15 @@ struct HeartRateReading {
     let timestamp: Date
 }
 
+/// One night's pre-sleep heart rate, for the historical trend chart.
+struct HeartRateTrendPoint: Identifiable {
+    /// The night this reading belongs to (the morning you woke up).
+    let date: Date
+    let bpm: Int
+
+    var id: Date { date }
+}
+
 /// Everything shown on the dashboard for a single selected day.
 struct DayData {
     let date: Date

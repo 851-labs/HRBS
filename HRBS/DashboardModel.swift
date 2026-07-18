@@ -37,6 +37,21 @@ final class DashboardModel {
         #endif
     }
 
+    func heartRateTrend(days: Int = 30) async -> [HeartRateTrendPoint] {
+        #if targetEnvironment(simulator)
+        return SampleDataProvider.heartRateTrend(days: days)
+        #elseif os(iOS)
+        if health.isAvailable {
+            await ensureAuthorization()
+            return await health.heartRateTrend(days: days)
+        } else {
+            return SampleDataProvider.heartRateTrend(days: days)
+        }
+        #else
+        return SampleDataProvider.heartRateTrend(days: days)
+        #endif
+    }
+
     #if os(iOS)
     private func ensureAuthorization() async {
         guard !hasRequestedAuthorization else { return }
