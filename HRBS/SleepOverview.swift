@@ -107,10 +107,10 @@ private struct StageBar: View {
             // bar above and below.
             ZStack(alignment: .leading) {
                 shape
-                    .fill(Color.gray.opacity(0.05))
+                    .fill(Color.gray.opacity(0.035))
                     .overlay {
                         DiagonalHatch(spacing: 6)
-                            .stroke(Color.gray.opacity(0.09), lineWidth: 2.5)
+                            .stroke(Color.gray.opacity(0.06), lineWidth: 2.5)
                             .clipShape(shape)
                     }
                     .frame(height: barHeight)
