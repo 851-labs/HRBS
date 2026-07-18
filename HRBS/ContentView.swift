@@ -45,7 +45,6 @@ struct DashboardView: View {
             .scrollTargetBehavior(.paging)
             .scrollPosition(id: $scrolledDate)
             .scrollIndicators(.hidden)
-            .defaultScrollAnchor(.trailing)
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     dateNavigator
