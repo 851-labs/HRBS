@@ -76,17 +76,22 @@ enum SampleDataProvider {
         return DayData(date: date, sleep: session, heartRate: reading, age: 30, baseline: .empty)
     }
 
-    /// Pre-sleep heart rate for each of the last `days` nights, oldest first.
-    static func heartRateTrend(days: Int, calendar: Calendar = .current) -> [HeartRateTrendPoint] {
+    /// Pre-sleep heart rate for each night in `fromDay...toDay`, oldest first.
+    /// Simulated history only goes back ~400 days so the "load more" path can
+    /// reach an end.
+    static func heartRateTrend(from fromDay: Date, to toDay: Date, calendar: Calendar = .current) -> [HeartRateTrendPoint] {
         let today = calendar.startOfDay(for: Date())
-        return (0..<days)
-            .compactMap { offset -> HeartRateTrendPoint? in
-                guard let date = calendar.date(byAdding: .day, value: -offset, to: today),
-                      let bpm = data(for: date, calendar: calendar).heartRate?.bpm else {
-                    return nil
-                }
-                return HeartRateTrendPoint(date: date, bpm: bpm)
+        let floor = calendar.date(byAdding: .day, value: -400, to: today) ?? today
+
+        var result: [HeartRateTrendPoint] = []
+        var day = fromDay
+        while day <= toDay {
+            if day >= floor, day <= today, let bpm = data(for: day, calendar: calendar).heartRate?.bpm {
+                result.append(HeartRateTrendPoint(date: day, bpm: bpm))
             }
-            .sorted { $0.date < $1.date }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+        return result
     }
 }

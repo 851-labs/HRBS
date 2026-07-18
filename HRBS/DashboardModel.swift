@@ -37,18 +37,18 @@ final class DashboardModel {
         #endif
     }
 
-    func heartRateTrend(days: Int = 30) async -> [HeartRateTrendPoint] {
+    func heartRateTrend(from fromDay: Date, to toDay: Date) async -> [HeartRateTrendPoint] {
         #if targetEnvironment(simulator)
-        return SampleDataProvider.heartRateTrend(days: days)
+        return SampleDataProvider.heartRateTrend(from: fromDay, to: toDay)
         #elseif os(iOS)
         if health.isAvailable {
             await ensureAuthorization()
-            return await health.heartRateTrend(days: days)
+            return await health.heartRateTrend(from: fromDay, to: toDay)
         } else {
-            return SampleDataProvider.heartRateTrend(days: days)
+            return SampleDataProvider.heartRateTrend(from: fromDay, to: toDay)
         }
         #else
-        return SampleDataProvider.heartRateTrend(days: days)
+        return SampleDataProvider.heartRateTrend(from: fromDay, to: toDay)
         #endif
     }
 

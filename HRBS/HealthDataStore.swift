@@ -51,19 +51,21 @@ final class HealthDataStore {
         )
     }
 
-    /// The pre-sleep heart rate for each of the last `days` nights, oldest first.
-    func heartRateTrend(days: Int, calendar: Calendar = .current) async -> [HeartRateTrendPoint] {
+    /// The pre-sleep heart rate for each night in `fromDay...toDay` (start-of-day
+    /// bounds, inclusive), oldest first.
+    func heartRateTrend(from fromDay: Date, to toDay: Date, calendar: Calendar = .current) async -> [HeartRateTrendPoint] {
         guard isAvailable else { return [] }
-        let today = calendar.startOfDay(for: Date())
-        guard let windowStart = calendar.date(byAdding: .day, value: -(days - 1), to: today) else { return [] }
-        let start = windowStart.addingTimeInterval(-12 * 3600)
-        let end = min(today.addingTimeInterval(12 * 3600), Date())
+        let start = fromDay.addingTimeInterval(-12 * 3600)
+        let end = min(toDay.addingTimeInterval(12 * 3600), Date())
+        guard end > start else { return [] }
 
         let segments = await stageSegments(from: start, to: end)
 
         var byNight: [Date: [SleepSegment]] = [:]
         for segment in segments {
-            byNight[nightDate(for: segment.start, calendar: calendar), default: []].append(segment)
+            let night = nightDate(for: segment.start, calendar: calendar)
+            guard night >= fromDay, night <= toDay else { continue }
+            byNight[night, default: []].append(segment)
         }
 
         let nights = byNight.map { night, segs in

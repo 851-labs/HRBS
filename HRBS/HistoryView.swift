@@ -36,7 +36,16 @@ struct HistoryView: View {
     @State private var scrollX = Calendar.current.startOfDay(for: Date())
     @State private var selectedDate: Date?
 
+    /// Oldest day we've queried so far; older chunks load as you scroll back.
+    @State private var earliestLoaded = Calendar.current.startOfDay(for: Date())
+    @State private var isLoadingMore = false
+    @State private var reachedOldest = false
+
     private let calendar = Calendar.current
+    private static let initialDays = 365
+    private static let chunkDays = 365
+
+    private var today: Date { calendar.startOfDay(for: Date()) }
 
     /// Points to plot for the current range (daily, or weekly-averaged for 6M).
     private var points: [HeartRateTrendPoint] {
@@ -63,9 +72,35 @@ struct HistoryView: View {
             .navigationTitle("Trends")
         }
         .task {
-            rawPoints = await model.heartRateTrend(days: 182)
+            let from = calendar.date(byAdding: .day, value: -(Self.initialDays - 1), to: today) ?? today
+            earliestLoaded = from
+            rawPoints = await model.heartRateTrend(from: from, to: today)
             isLoading = false
             resetScroll()
+        }
+        .onChange(of: scrollX) { loadOlderIfNeeded() }
+    }
+
+    /// Fetches an older chunk of history when the user scrolls near the start,
+    /// going back until HealthKit has no more data.
+    private func loadOlderIfNeeded() {
+        guard !isLoadingMore, !reachedOldest else { return }
+        // Trigger when the visible window is within one window of the oldest data.
+        guard scrollX <= earliestLoaded.addingTimeInterval(range.visibleSeconds) else { return }
+
+        isLoadingMore = true
+        let newTo = calendar.date(byAdding: .day, value: -1, to: earliestLoaded) ?? earliestLoaded
+        let newFrom = calendar.date(byAdding: .day, value: -Self.chunkDays, to: newTo) ?? newTo
+
+        Task {
+            let older = await model.heartRateTrend(from: newFrom, to: newTo)
+            earliestLoaded = newFrom
+            if older.isEmpty {
+                reachedOldest = true
+            } else {
+                rawPoints = (older + rawPoints).sorted { $0.date < $1.date }
+            }
+            isLoadingMore = false
         }
     }
 
@@ -182,7 +217,7 @@ struct HistoryView: View {
         .chartScrollableAxes(.horizontal)
         .chartXVisibleDomain(length: range.visibleSeconds)
         .chartScrollPosition(x: $scrollX)
-        .chartScrollTargetBehavior(.paging)
+        .chartScrollTargetBehavior(scrollBehavior)
         .chartXSelection(value: $selectedDate)
     }
 
@@ -210,6 +245,16 @@ struct HistoryView: View {
         let end = scrollX.addingTimeInterval(range.visibleSeconds - 86_400)
         let start = scrollX
         return "\(start.formatted(.dateTime.month(.abbreviated).day())) – \(end.formatted(.dateTime.month(.abbreviated).day()))"
+    }
+
+    /// Snaps scrolling to the bucket boundary (week starts for W, month starts
+    /// for M/6M). valueAligned also keeps scroll momentum, so fast flicks travel
+    /// far instead of one page at a time.
+    private var scrollBehavior: some ChartScrollTargetBehavior {
+        // Snap to a day boundary after scrolling. No `majorAlignment` — that
+        // makes swipes paged (one unit at a time), which felt slow; without it
+        // scroll momentum carries across many days and then settles on a day.
+        .valueAligned(matching: DateComponents(hour: 0))
     }
 
     private var yDomain: ClosedRange<Int> {
