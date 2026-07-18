@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// The app's main screen: a scrollable summary of pre-sleep heart rate and
-/// sleep stages for the selected day, with a date picker in the navigation bar.
+/// The app's main screen: a horizontally-paged set of days (swipe left/right to
+/// move between dates, like Calendar), with a date picker in the navigation bar
+/// that stays in sync with the current page.
 struct DashboardView: View {
     @State private var selectedDate = Calendar.current.startOfDay(for: Date())
     @State private var isShowingDatePicker = false
@@ -9,56 +10,40 @@ struct DashboardView: View {
 
     private let calendar = Calendar.current
 
+    /// How many days back you can swipe.
+    private static let historyLength = 120
+
+    private var today: Date { calendar.startOfDay(for: Date()) }
+
+    /// Oldest day first, today last, so swiping right goes back in time.
+    private var dates: [Date] {
+        (0..<Self.historyLength)
+            .reversed()
+            .compactMap { calendar.date(byAdding: .day, value: -$0, to: today) }
+    }
+
+    private var earliestDate: Date { dates.first ?? today }
+
     private var isViewingToday: Bool {
         calendar.isDate(selectedDate, inSameDayAs: today)
     }
 
-    private var today: Date {
-        calendar.startOfDay(for: Date())
-    }
-
     var body: some View {
         NavigationStack {
-            content
-                .background(Color.groupedBackground)
-                .toolbar {
-                    ToolbarItem(placement: .principal) {
-                        dateNavigator
-                    }
+            TabView(selection: $selectedDate) {
+                ForEach(dates, id: \.self) { date in
+                    DayPage(date: date, model: model)
+                        .tag(date)
                 }
-                .sheet(isPresented: $isShowingDatePicker) {
-                    datePickerSheet
-                }
-        }
-        .task(id: selectedDate) {
-            await model.load(for: selectedDate)
-        }
-    }
-
-    // MARK: - Content
-
-    @ViewBuilder
-    private var content: some View {
-        switch model.state {
-        case .loading:
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-        case .loaded(let day):
-            ScrollView {
-                VStack(spacing: 16) {
-                    HeartRateCard(reading: day.heartRate)
-                    SleepCard(session: day.sleep, age: day.age, baseline: day.baseline)
-                }
-                .padding(.horizontal)
-                .padding(.top, 8)
             }
-
-        case .empty:
-            ContentUnavailableView {
-                Label("No Sleep Data", systemImage: "bed.double")
-            } description: {
-                Text("There's no sleep recorded for this day. Make sure HRBS is allowed to read Sleep and Heart Rate in Settings › Health › Data Access & Devices.")
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    dateNavigator
+                }
+            }
+            .sheet(isPresented: $isShowingDatePicker) {
+                datePickerSheet
             }
         }
     }
@@ -72,6 +57,7 @@ struct DashboardView: View {
             } label: {
                 Image(systemName: "chevron.left")
             }
+            .disabled(calendar.isDate(selectedDate, inSameDayAs: earliestDate))
 
             Button {
                 isShowingDatePicker = true
@@ -114,7 +100,7 @@ struct DashboardView: View {
                     get: { selectedDate },
                     set: { selectedDate = calendar.startOfDay(for: $0) }
                 ),
-                in: ...today,
+                in: earliestDate...today,
                 displayedComponents: .date
             )
             .datePickerStyle(.graphical)
@@ -133,8 +119,52 @@ struct DashboardView: View {
 
     private func shift(by days: Int) {
         guard let newDate = calendar.date(byAdding: .day, value: days, to: selectedDate) else { return }
-        if calendar.startOfDay(for: newDate) <= today {
-            selectedDate = calendar.startOfDay(for: newDate)
+        let day = calendar.startOfDay(for: newDate)
+        guard day >= earliestDate, day <= today else { return }
+        withAnimation {
+            selectedDate = day
+        }
+    }
+}
+
+/// One swipeable day. Loads its own data so adjacent pages are ready as you swipe.
+private struct DayPage: View {
+    let date: Date
+    let model: DashboardModel
+
+    @State private var state: DashboardModel.LoadState = .loading
+
+    var body: some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.groupedBackground)
+            .task(id: date) {
+                state = await model.result(for: date)
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch state {
+        case .loading:
+            ProgressView()
+
+        case .loaded(let day):
+            ScrollView {
+                VStack(spacing: 16) {
+                    HeartRateCard(reading: day.heartRate)
+                    SleepCard(session: day.sleep, age: day.age, baseline: day.baseline)
+                }
+                .padding(.horizontal)
+                .padding(.top, 8)
+            }
+
+        case .empty:
+            ContentUnavailableView {
+                Label("No Sleep Data", systemImage: "bed.double")
+            } description: {
+                Text("There's no sleep recorded for this day. Make sure HRBS is allowed to read Sleep and Heart Rate in Settings › Health › Data Access & Devices.")
+            }
         }
     }
 }
