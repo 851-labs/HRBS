@@ -66,11 +66,21 @@ final class HealthDataStore {
             byNight[nightDate(for: segment.start, calendar: calendar), default: []].append(segment)
         }
 
+        let nights = byNight.map { night, segs in
+            (date: night, session: SleepSession(segments: segs.sorted { $0.start < $1.start }))
+        }
+
+        // Query each night's pre-sleep heart rate concurrently.
         var points: [HeartRateTrendPoint] = []
-        for (night, nightSegments) in byNight {
-            let session = SleepSession(segments: nightSegments.sorted { $0.start < $1.start })
-            if let reading = await heartRate(before: session.sleepOnset) {
-                points.append(HeartRateTrendPoint(date: night, bpm: reading.bpm))
+        await withTaskGroup(of: HeartRateTrendPoint?.self) { group in
+            for night in nights {
+                group.addTask {
+                    guard let reading = await self.heartRate(before: night.session.sleepOnset) else { return nil }
+                    return HeartRateTrendPoint(date: night.date, bpm: reading.bpm)
+                }
+            }
+            for await point in group where point != nil {
+                points.append(point!)
             }
         }
         return points.sorted { $0.date < $1.date }
