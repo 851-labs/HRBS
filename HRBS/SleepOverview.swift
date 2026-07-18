@@ -176,47 +176,35 @@ private struct VerticalLine: Shape {
 // MARK: - Stage metadata
 
 extension SleepStage {
-    /// An age-adjusted healthy share of a full night for this stage, as a
-    /// fraction of total sleep. A documented approximation of the age-related
-    /// trends in Ohayon et al. (2004): deep sleep declines ~2% per decade
-    /// (leveling off after ~60), REM dips slightly, and core/light rises to
-    /// compensate. Awake has no target. Falls back to ~30-year-old values.
-    private func optimalShareOfSleep(forAge age: Int?) -> ClosedRange<Double>? {
+    /// The recommended amount of time (in seconds) to spend in this stage per
+    /// night, the way top sleep apps (e.g. Oura, Gentler) express it: an
+    /// absolute duration target rather than a percentage. These are deliberately
+    /// realistic for consumer wearables — Apple's sleep tracking reports deep
+    /// sleep on the low side, so the deep target is Oura's ~45–90 min rather
+    /// than a textbook 15–20% of an 8h night. Targets taper with age (deep and
+    /// REM decline). Awake has no target. Falls back to ~30-year-old values.
+    /// Because these are absolute, a short night still reads as "not enough".
+    func optimalDurationRange(forAge age: Int?) -> ClosedRange<TimeInterval>? {
         let years = Double(min(max(age ?? 30, 18), 90))
-        let leveled = min(years, 60) // deep/core changes plateau after ~60
+        let over40 = max(0, years - 40) // most age-related decline starts here
 
-        func band(midpointPercent: Double, halfWidthPercent: Double) -> ClosedRange<Double> {
-            let low = max(0, (midpointPercent - halfWidthPercent) / 100)
-            let high = min(1, (midpointPercent + halfWidthPercent) / 100)
-            return low...high
+        func minutes(_ low: Double, _ high: Double) -> ClosedRange<TimeInterval> {
+            (max(15, low) * 60)...(max(30, high) * 60)
         }
 
         switch self {
         case .awake:
             return nil
         case .deep:
-            let midpoint = max(8, 20 - 0.2 * (leveled - 25))
-            return band(midpointPercent: midpoint, halfWidthPercent: 4)
+            // Oura's optimal deep window (~45–90 min), tapering with age.
+            return minutes(45 - over40 * 0.6, 90 - over40 * 1.2)
         case .rem:
-            let midpoint = max(15, 23 - 0.06 * (years - 25))
-            return band(midpointPercent: midpoint, halfWidthPercent: 3)
+            // ~75–120 min, easing down slightly with age.
+            return minutes(75 - over40 * 0.6, 120 - over40 * 0.8)
         case .core:
-            let midpoint = min(60, 50 + 0.2 * (leveled - 25))
-            return band(midpointPercent: midpoint, halfWidthPercent: 5)
+            // Light/core sleep is the bulk of the night (~3–4.5 h).
+            return minutes(180, 270)
         }
-    }
-
-    /// The recommended amount of time (in seconds) to spend in this stage per
-    /// night, the way top sleep apps (e.g. Oura) express it: an absolute
-    /// duration target rather than a percentage. Derived by applying the
-    /// age-adjusted share to a healthy reference sleep duration (~8h, a little
-    /// less for older adults). Because it's an absolute target, a short night
-    /// correctly reads as "not enough" even when the proportions look normal.
-    func optimalDurationRange(forAge age: Int?) -> ClosedRange<TimeInterval>? {
-        guard let share = optimalShareOfSleep(forAge: age) else { return nil }
-        let years = min(max(age ?? 30, 18), 90)
-        let referenceSleep: TimeInterval = (years >= 65 ? 7.5 : 8.0) * 3600
-        return (share.lowerBound * referenceSleep)...(share.upperBound * referenceSleep)
     }
 }
 
