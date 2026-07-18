@@ -37,7 +37,7 @@ struct DashboardView: View {
                 LazyHStack(spacing: 0) {
                     ForEach(dates, id: \.self) { date in
                         DayPage(date: date, model: model)
-                            .containerRelativeFrame(.horizontal)
+                            .containerRelativeFrame([.horizontal, .vertical])
                     }
                 }
                 .scrollTargetLayout()
