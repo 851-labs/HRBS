@@ -15,7 +15,7 @@ struct SleepOverview: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Overview")
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(.secondary)
