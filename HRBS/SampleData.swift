@@ -73,6 +73,6 @@ enum SampleDataProvider {
         let hrTimestamp = session.sleepOnset.addingTimeInterval(-5 * 60)
         let reading = HeartRateReading(bpm: bpm, timestamp: hrTimestamp)
 
-        return DayData(date: date, sleep: session, heartRate: reading, age: 30)
+        return DayData(date: date, sleep: session, heartRate: reading, age: 30, baseline: .empty)
     }
 }

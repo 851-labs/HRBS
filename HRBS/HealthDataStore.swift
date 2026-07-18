@@ -41,7 +41,14 @@ final class HealthDataStore {
             return nil
         }
         let reading = await heartRate(before: session.sleepOnset)
-        return DayData(date: date, sleep: session, heartRate: reading, age: currentAge(calendar: calendar))
+        let priorNights = await recentSessions(before: date, calendar: calendar)
+        return DayData(
+            date: date,
+            sleep: session,
+            heartRate: reading,
+            age: currentAge(calendar: calendar),
+            baseline: SleepBaseline(sessions: priorNights, calendar: calendar)
+        )
     }
 
     // MARK: - Sleep
@@ -54,6 +61,46 @@ final class HealthDataStore {
         let end = min(midnight.addingTimeInterval(12 * 3600), Date())
         guard end > start else { return nil }
 
+        let segments = await stageSegments(from: start, to: end)
+        return segments.isEmpty ? nil : SleepSession(segments: segments)
+    }
+
+    /// The prior nights (up to `window`) before the selected day, used to build
+    /// a rolling personal baseline. One range query, grouped into nights by the
+    /// day each night ends on (the same noon-to-noon rule as `sleepSession`).
+    private func recentSessions(before date: Date, window: Int = 28, calendar: Calendar = .current) async -> [SleepSession] {
+        let selectedMidnight = calendar.startOfDay(for: date)
+        guard let start = calendar.date(byAdding: .day, value: -(window + 1), to: selectedMidnight) else {
+            return []
+        }
+        // Prior nights only — stop at the selected day's midnight.
+        let segments = await stageSegments(from: start, to: selectedMidnight)
+
+        var byNight: [Date: [SleepSegment]] = [:]
+        for segment in segments {
+            let night = nightDate(for: segment.start, calendar: calendar)
+            guard night < selectedMidnight else { continue }
+            byNight[night, default: []].append(segment)
+        }
+
+        return byNight.values
+            .map { SleepSession(segments: $0.sorted { $0.start < $1.start }) }
+            .filter { !$0.segments.isEmpty }
+    }
+
+    /// The date a sleep period is attributed to (the morning you wake up): a
+    /// segment starting after noon belongs to the next calendar day's night.
+    private func nightDate(for start: Date, calendar: Calendar) -> Date {
+        let day = calendar.startOfDay(for: start)
+        let hour = calendar.component(.hour, from: start)
+        return hour >= 12 ? (calendar.date(byAdding: .day, value: 1, to: day) ?? day) : day
+    }
+
+    /// Reads stage-level sleep segments in a time range (excludes the whole-night
+    /// "in bed" envelope). Shared by the day view and the baseline query.
+    private func stageSegments(from start: Date, to end: Date) async -> [SleepSegment] {
+        guard end > start else { return [] }
+
         let timePredicate = HKQuery.predicateForSamples(withStart: start, end: end, options: [])
         let stagePredicate = NSCompoundPredicate(orPredicateWithSubpredicates: stageValues.map {
             HKQuery.predicateForCategorySamples(with: .equalTo, value: $0.rawValue)
@@ -65,13 +112,12 @@ final class HealthDataStore {
             sortDescriptors: [SortDescriptor(\.startDate)]
         )
 
-        guard let samples = try? await descriptor.result(for: store) else { return nil }
+        guard let samples = try? await descriptor.result(for: store) else { return [] }
 
-        let segments = samples.compactMap { sample -> SleepSegment? in
+        return samples.compactMap { sample -> SleepSegment? in
             guard let stage = stage(for: sample.value) else { return nil }
             return SleepSegment(stage: stage, start: sample.startDate, end: sample.endDate)
         }
-        return segments.isEmpty ? nil : SleepSession(segments: segments)
     }
 
     /// The stage-level sleep values we care about (the whole-night "in bed"

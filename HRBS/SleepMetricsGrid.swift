@@ -5,6 +5,8 @@ import SwiftUI
 /// a large value and a color-coded status.
 struct SleepMetricsGrid: View {
     let session: SleepSession
+    /// Rolling personal baseline used to judge "usual" bed/wake times.
+    var baseline: SleepBaseline = .empty
 
     private let columns = [
         GridItem(.flexible(), alignment: .topLeading),
@@ -30,12 +32,12 @@ struct SleepMetricsGrid: View {
             MetricTile(
                 title: "Fell Asleep At",
                 value: SleepMetric.timeValue(session.sleepOnset),
-                status: SleepMetric.fellAsleepStatus(session.sleepOnset)
+                status: SleepMetric.fellAsleepStatus(session.sleepOnset, baseline: baseline)
             )
             MetricTile(
                 title: "Woke Up At",
                 value: SleepMetric.timeValue(session.inBedEnd),
-                status: SleepMetric.wokeUpStatus(session.inBedEnd)
+                status: SleepMetric.wokeUpStatus(session.inBedEnd, baseline: baseline)
             )
         }
     }
@@ -121,36 +123,30 @@ enum SleepMetric {
         }
     }
 
-    static func fellAsleepStatus(_ onset: Date) -> MetricStatus {
-        // Minutes since 6pm, so late-evening and past-midnight bedtimes compare cleanly.
-        let usual = 5 * 60 // 23:00
-        let delta = minutesSinceEvening(onset) - usual
-        if delta > 30 {
+    /// How far a value can sit from the baseline before it reads as unusual.
+    private static let timingTolerance = 45
+
+    static func fellAsleepStatus(_ onset: Date, baseline: SleepBaseline) -> MetricStatus {
+        // Compare to the personal median once calibrated; otherwise a fixed 23:00.
+        let reference = baseline.isCalibrated ? baseline.bedtimeMinutes! : 5 * 60
+        let delta = SleepTime.minutesSinceEvening(onset) - reference
+        if delta > timingTolerance {
             return MetricStatus(label: "Later Than Usual", symbol: "chevron.up.circle.fill", color: .orange)
-        } else if delta < -30 {
+        } else if delta < -timingTolerance {
             return MetricStatus(label: "Earlier Than Usual", symbol: "chevron.down.circle.fill", color: .teal)
         }
         return MetricStatus(label: "On Schedule", symbol: "checkmark.circle.fill", color: .green)
     }
 
-    static func wokeUpStatus(_ wake: Date) -> MetricStatus {
-        let usual = 7 * 60 // 07:00
-        let delta = minutesOfDay(wake) - usual
-        if delta > 30 {
+    static func wokeUpStatus(_ wake: Date, baseline: SleepBaseline) -> MetricStatus {
+        let reference = baseline.isCalibrated ? baseline.wakeMinutes! : 7 * 60
+        let delta = SleepTime.minutesOfDay(wake) - reference
+        if delta > timingTolerance {
             return MetricStatus(label: "Later Than Usual", symbol: "chevron.up.circle.fill", color: .green)
-        } else if delta < -30 {
+        } else if delta < -timingTolerance {
             return MetricStatus(label: "Earlier Than Usual", symbol: "chevron.down.circle.fill", color: .orange)
         }
         return MetricStatus(label: "On Schedule", symbol: "checkmark.circle.fill", color: .green)
-    }
-
-    private static func minutesOfDay(_ date: Date) -> Int {
-        let c = Calendar.current.dateComponents([.hour, .minute], from: date)
-        return (c.hour ?? 0) * 60 + (c.minute ?? 0)
-    }
-
-    private static func minutesSinceEvening(_ date: Date) -> Int {
-        (minutesOfDay(date) - 18 * 60 + 1440) % 1440
     }
 }
 

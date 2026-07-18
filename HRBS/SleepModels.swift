@@ -69,6 +69,8 @@ struct DayData {
     let heartRate: HeartRateReading?
     /// The sleeper's age, used to age-adjust the optimal sleep-stage ranges.
     let age: Int?
+    /// Rolling baseline of recent nights, used to judge "usual" bed/wake times.
+    let baseline: SleepBaseline
 }
 
 extension TimeInterval {

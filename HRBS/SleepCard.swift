@@ -5,6 +5,7 @@ import SwiftUI
 struct SleepCard: View {
     let session: SleepSession
     var age: Int? = nil
+    var baseline: SleepBaseline = .empty
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -17,7 +18,7 @@ struct SleepCard: View {
                 Spacer()
             }
 
-            SleepMetricsGrid(session: session)
+            SleepMetricsGrid(session: session, baseline: baseline)
 
             SleepStagesChart(session: session)
                 .frame(height: 150)

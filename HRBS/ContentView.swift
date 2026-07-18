@@ -48,7 +48,7 @@ struct DashboardView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     HeartRateCard(reading: day.heartRate)
-                    SleepCard(session: day.sleep, age: day.age)
+                    SleepCard(session: day.sleep, age: day.age, baseline: day.baseline)
                 }
                 .padding(.horizontal)
                 .padding(.top, 8)
