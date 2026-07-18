@@ -17,16 +17,7 @@ struct SleepCard: View {
                 Spacer()
             }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Time Asleep")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Text(session.timeAsleep.hoursMinutesString)
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
-                Text("\(session.inBedStart, format: .dateTime.hour().minute()) – \(session.inBedEnd, format: .dateTime.hour().minute())")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            SleepMetricsGrid(session: session)
 
             SleepStagesChart(session: session)
                 .frame(height: 150)
