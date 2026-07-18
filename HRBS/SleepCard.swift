@@ -89,9 +89,15 @@ struct SleepStagesChart: View {
                 guard yEnd > yStart else { continue }
 
                 let rect = CGRect(x: cx - riserWidth / 2, y: yStart, width: riserWidth, height: yEnd - yStart)
-                // A steady two-tone gradient (no fade to white) so even tall
-                // risers read as a clean line rather than a ghostly streak.
-                let gradient = Gradient(colors: [upper.color.opacity(0.55), lower.color.opacity(0.55)])
+                // Faintly tinted at each end (where it meets a segment) and
+                // fading to near-white in the middle — Apple Health's pale
+                // "tube" look. Reads clean now that risers tuck under segments.
+                let gradient = Gradient(stops: [
+                    .init(color: upper.color.opacity(0.50), location: 0.0),
+                    .init(color: upper.color.opacity(0.08), location: 0.30),
+                    .init(color: lower.color.opacity(0.08), location: 0.70),
+                    .init(color: lower.color.opacity(0.50), location: 1.0),
+                ])
                 context.fill(
                     Path(roundedRect: rect, cornerRadius: riserWidth / 2),
                     with: .linearGradient(
