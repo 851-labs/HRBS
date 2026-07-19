@@ -47,9 +47,107 @@ struct HistoryView: View {
 
     private var today: Date { calendar.startOfDay(for: Date()) }
 
-    /// Points to plot for the current range (daily, or weekly-averaged for 6M).
-    private var points: [HeartRateTrendPoint] {
-        range.aggregatesWeekly ? Self.weeklyAveraged(rawPoints, calendar: calendar) : rawPoints
+    // Derived data, cached so it isn't recomputed on every scroll tick.
+    // Rebuilt by `rebuildDerived()` when rawPoints or range change.
+
+    /// Points for the current range (daily, or weekly-averaged for 6M).
+    @State private var displayPoints: [HeartRateTrendPoint] = []
+    /// Full loaded data extent; defines the scrollable width via chartXScale.
+    @State private var xDomain: ClosedRange<Date> = Calendar.current.startOfDay(for: Date())...Date()
+    @State private var yDomain: ClosedRange<Int> = 40...80
+    /// The date span whose points are actually plotted (visible window plus a
+    /// couple of window-widths of buffer on each side).
+    @State private var renderWindow: ClosedRange<Date> = .distantPast ... .distantFuture
+    /// Explicit X-axis mark dates within the render window (see recomputeAxisDates).
+    @State private var axisDates: [Date] = []
+
+    /// Rebuilds everything derived from `rawPoints` + `range`. Called after the
+    /// initial load, after each older chunk is prepended, and on range change.
+    private func rebuildDerived() {
+        displayPoints = range.aggregatesWeekly
+            ? Self.weeklyAveraged(rawPoints, calendar: calendar)
+            : rawPoints
+
+        if let first = displayPoints.first?.date, let last = displayPoints.last?.date, first < last {
+            xDomain = first...last
+        } else {
+            xDomain = (calendar.date(byAdding: .day, value: -(range.visibleDays - 1), to: today) ?? today)...today
+        }
+
+        let values = displayPoints.map(\.bpm)
+        if let low = values.min(), let high = values.max() {
+            yDomain = (low - 5)...(high + 5)
+        } else {
+            yDomain = 40...80
+        }
+
+        // xDomain may have grown (older chunk prepended) — keep axis in sync.
+        recomputeAxisDates()
+    }
+
+    /// Re-centers the render window on `scrollX`, but only once scroll has left
+    /// the inner hysteresis band (± 1 window beyond the visible region), so the
+    /// chart's ForEach identity stays stable during a fling.
+    private func updateRenderWindowIfNeeded(force: Bool = false) {
+        let window = range.visibleSeconds
+        let innerLow = scrollX.addingTimeInterval(-window)
+        let innerHigh = scrollX.addingTimeInterval(2 * window) // visible + 1 window after
+        if !force, renderWindow.contains(innerLow), renderWindow.contains(innerHigh) { return }
+        renderWindow = scrollX.addingTimeInterval(-2 * window)...scrollX.addingTimeInterval(3 * window)
+        recomputeAxisDates()
+    }
+
+    /// Explicit X-axis mark dates, confined to the render window. A stride-based
+    /// `AxisMarks(values: .stride(by: .day))` generates marks across the entire
+    /// scrollable domain (365+ per loaded year in W) and re-evaluates them on
+    /// every scroll tick — measured at ~280ms/frame on an iPhone 14 Pro, which
+    /// made W-scrolling run at a few fps. Explicit values keep it at ~35 marks.
+    private func recomputeAxisDates() {
+        let lo = max(renderWindow.lowerBound, xDomain.lowerBound)
+        let hi = min(renderWindow.upperBound, xDomain.upperBound)
+        guard lo <= hi else {
+            axisDates = []
+            return
+        }
+
+        var dates: [Date] = []
+        var date: Date
+        let step: (Date) -> Date?
+        switch range {
+        case .week:
+            date = calendar.startOfDay(for: lo)
+            step = { self.calendar.date(byAdding: .day, value: 1, to: $0) }
+        case .month:
+            date = calendar.dateInterval(of: .weekOfYear, for: lo)?.start ?? calendar.startOfDay(for: lo)
+            step = { self.calendar.date(byAdding: .day, value: 7, to: $0) }
+        case .sixMonths:
+            date = calendar.dateInterval(of: .month, for: lo)?.start ?? calendar.startOfDay(for: lo)
+            step = { self.calendar.date(byAdding: .month, value: 1, to: $0) }
+        }
+        while date <= hi {
+            dates.append(date)
+            guard let next = step(date), next > date else { break }
+            date = next
+        }
+        axisDates = dates
+    }
+
+    /// Index of the first point at or after `date` (binary search; `points` is sorted).
+    private static func lowerBound(_ points: [HeartRateTrendPoint], _ date: Date) -> Int {
+        var low = 0, high = points.count
+        while low < high {
+            let mid = (low + high) / 2
+            if points[mid].date < date { low = mid + 1 } else { high = mid }
+        }
+        return low
+    }
+
+    /// Points inside the render window, overscanning 2 points past each edge so
+    /// the Catmull-Rom control points at the (offscreen) edges stay identical.
+    private var plottedPoints: ArraySlice<HeartRateTrendPoint> {
+        let low = Self.lowerBound(displayPoints, renderWindow.lowerBound)
+        let high = Self.lowerBound(displayPoints, renderWindow.upperBound)
+        return displayPoints[max(0, low - 2)..<min(displayPoints.count, high + 2)]
     }
 
     var body: some View {
@@ -76,17 +174,22 @@ struct HistoryView: View {
             earliestLoaded = from
             rawPoints = await model.heartRateTrend(from: from, to: today)
             isLoading = false
+            rebuildDerived()
             resetScroll()
         }
-        .onChange(of: scrollX) { loadOlderIfNeeded() }
+        .onChange(of: scrollX) {
+            updateRenderWindowIfNeeded()
+            loadOlderIfNeeded()
+        }
     }
 
     /// Fetches an older chunk of history when the user scrolls near the start,
     /// going back until HealthKit has no more data.
     private func loadOlderIfNeeded() {
         guard !isLoadingMore, !reachedOldest else { return }
-        // Trigger when the visible window is within one window of the oldest data.
-        guard scrollX <= earliestLoaded.addingTimeInterval(range.visibleSeconds) else { return }
+        // Trigger while still a few windows away from the oldest data, so older
+        // chunks arrive before the render buffer reaches the data edge.
+        guard scrollX <= earliestLoaded.addingTimeInterval(range.visibleSeconds * 3) else { return }
 
         isLoadingMore = true
         let newTo = calendar.date(byAdding: .day, value: -1, to: earliestLoaded) ?? earliestLoaded
@@ -99,6 +202,7 @@ struct HistoryView: View {
                 reachedOldest = true
             } else {
                 rawPoints = (older + rawPoints).sorted { $0.date < $1.date }
+                rebuildDerived()
             }
             isLoadingMore = false
         }
@@ -113,6 +217,7 @@ struct HistoryView: View {
             .padding(.horizontal)
             .onChange(of: range) {
                 selectedDate = nil
+                rebuildDerived()
                 resetScroll()
             }
 
@@ -168,7 +273,7 @@ struct HistoryView: View {
 
     private var chart: some View {
         Chart {
-            ForEach(points) { point in
+            ForEach(plottedPoints) { point in
                 LineMark(x: .value("Date", point.date), y: .value("BPM", point.bpm))
                     .interpolationMethod(.catmullRom)
                     .foregroundStyle(.red)
@@ -186,6 +291,9 @@ struct HistoryView: View {
                     .symbolSize(80)
             }
         }
+        // The explicit X domain keeps the scrollable extent at the full loaded
+        // history even though only `plottedPoints` are rendered.
+        .chartXScale(domain: xDomain)
         .chartYScale(domain: yDomain)
         .chartYAxis {
             AxisMarks(position: .trailing) { value in
@@ -196,19 +304,22 @@ struct HistoryView: View {
             }
         }
         .chartXAxis {
+            // Explicit values, not `.stride(by:)`: a stride generates marks over
+            // the entire scrollable domain on every scroll tick (see
+            // recomputeAxisDates), which is what made the W bucket unusable.
             switch range {
             case .week:
-                AxisMarks(values: .stride(by: .day)) { _ in
+                AxisMarks(values: axisDates) { _ in
                     AxisGridLine()
                     AxisValueLabel(format: .dateTime.weekday(.narrow))
                 }
             case .month:
-                AxisMarks(values: .stride(by: .day, count: 7)) { _ in
+                AxisMarks(values: axisDates) { _ in
                     AxisGridLine()
                     AxisValueLabel(format: .dateTime.month(.abbreviated).day())
                 }
             case .sixMonths:
-                AxisMarks(values: .stride(by: .month)) { _ in
+                AxisMarks(values: axisDates) { _ in
                     AxisGridLine()
                     AxisValueLabel(format: .dateTime.month(.abbreviated))
                 }
@@ -219,26 +330,38 @@ struct HistoryView: View {
         .chartScrollPosition(x: $scrollX)
         .chartScrollTargetBehavior(scrollBehavior)
         .chartXSelection(value: $selectedDate)
+        // Recreate the chart when the range changes: the scroll target behavior
+        // is captured by the underlying scroll view and doesn't update in place,
+        // so without this the previous range's snap rule stays active.
+        .id(range)
     }
 
     // MARK: - Derived values
 
+    /// Nearest point to the scrubbed date (binary search on the sorted array).
     private var selectedPoint: HeartRateTrendPoint? {
-        guard let selectedDate else { return nil }
-        return points.min {
-            abs($0.date.timeIntervalSince(selectedDate)) < abs($1.date.timeIntervalSince(selectedDate))
+        guard let selectedDate, !displayPoints.isEmpty else { return nil }
+        let index = Self.lowerBound(displayPoints, selectedDate)
+        var best = displayPoints[min(index, displayPoints.count - 1)]
+        if index > 0 {
+            let before = displayPoints[index - 1]
+            if abs(before.date.timeIntervalSince(selectedDate)) < abs(best.date.timeIntervalSince(selectedDate)) {
+                best = before
+            }
         }
+        return best
     }
 
-    private var visiblePoints: [HeartRateTrendPoint] {
-        let end = scrollX.addingTimeInterval(range.visibleSeconds)
-        return points.filter { $0.date >= scrollX && $0.date < end }
+    private var visibleSlice: ArraySlice<HeartRateTrendPoint> {
+        let low = Self.lowerBound(displayPoints, scrollX)
+        let high = Self.lowerBound(displayPoints, scrollX.addingTimeInterval(range.visibleSeconds))
+        return displayPoints[low..<high]
     }
 
     private var visibleAverage: Int? {
-        let values = visiblePoints.map(\.bpm)
-        guard !values.isEmpty else { return nil }
-        return Int((Double(values.reduce(0, +)) / Double(values.count)).rounded())
+        let slice = visibleSlice
+        guard !slice.isEmpty else { return nil }
+        return Int((Double(slice.reduce(0) { $0 + $1.bpm }) / Double(slice.count)).rounded())
     }
 
     private var visibleRangeLabel: String {
@@ -247,25 +370,28 @@ struct HistoryView: View {
         return "\(start.formatted(.dateTime.month(.abbreviated).day())) – \(end.formatted(.dateTime.month(.abbreviated).day()))"
     }
 
-    /// Snaps scrolling to the bucket boundary (week starts for W, month starts
-    /// for M/6M). valueAligned also keeps scroll momentum, so fast flicks travel
-    /// far instead of one page at a time.
-    private var scrollBehavior: some ChartScrollTargetBehavior {
-        // Snap to a day boundary after scrolling. No `majorAlignment` — that
-        // makes swipes paged (one unit at a time), which felt slow; without it
-        // scroll momentum carries across many days and then settles on a day.
-        .valueAligned(matching: DateComponents(hour: 0))
-    }
-
-    private var yDomain: ClosedRange<Int> {
-        let values = points.map(\.bpm)
-        guard let low = values.min(), let high = values.max() else { return 40...80 }
-        return (low - 5)...(high + 5)
+    /// Lands scroll deceleration on week-start boundaries (the locale's first
+    /// weekday) for every range. `limitBehavior: .never` preserves fling
+    /// momentum — `.automatic` limits travel distance in compact width, which
+    /// is what made an earlier `majorAlignment` experiment feel paged/slow.
+    ///
+    /// M deliberately snaps to week starts, not month starts: month-boundary
+    /// targets are ~30 days apart, and after a free-momentum deceleration the
+    /// chart won't correct across up to half a screen, so it rests on a day
+    /// boundary instead (verified empirically). Week starts also line up with
+    /// M's weekly axis gridlines. 6M's weekly-averaged points sit exactly on
+    /// week starts, so the same alignment fits there too.
+    private var scrollBehavior: ValueAlignedChartScrollTargetBehavior {
+        .valueAligned(
+            matching: DateComponents(hour: 0, weekday: calendar.firstWeekday),
+            limitBehavior: .never
+        )
     }
 
     private func resetScroll() {
-        let lastDay = calendar.startOfDay(for: points.last?.date ?? Date())
+        let lastDay = calendar.startOfDay(for: displayPoints.last?.date ?? Date())
         scrollX = calendar.date(byAdding: .day, value: -(range.visibleDays - 1), to: lastDay) ?? lastDay
+        updateRenderWindowIfNeeded(force: true)
     }
 
     // MARK: - Aggregation
