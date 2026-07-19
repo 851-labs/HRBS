@@ -39,6 +39,10 @@ struct HistoryView: View {
     /// positions.
     @State private var anchorDay = Calendar.current.startOfDay(for: Date())
     @State private var selectedDate: Date?
+    @State private var isChartDragging = false
+    @State private var snapGeneration = 0
+    @State private var isProgrammaticChartMove = false
+    @State private var programmaticMoveGeneration = 0
 
     /// Oldest day we've queried so far; older chunks load as you scroll back.
     @State private var earliestLoaded = Calendar.current.startOfDay(for: Date())
@@ -186,12 +190,25 @@ struct HistoryView: View {
             rawPoints = await model.heartRateTrend(from: from, to: today)
             isLoading = false
             rebuildDerived()
+            beginProgrammaticChartMove()
             resetScroll()
         }
         .onChange(of: scrollX) {
             anchorDay = trailingDay(for: scrollX, in: range)
             updateRenderWindowIfNeeded()
             loadOlderIfNeeded()
+            if !isChartDragging, !isProgrammaticChartMove {
+                snapGeneration &+= 1
+            }
+        }
+        // Swift Charts does not expose its internal scroll phase here. Every
+        // deceleration tick cancels the previous task, leaving only the final
+        // resting position to be aligned.
+        .task(id: snapGeneration) {
+            guard !isLoading, !isChartDragging, !isProgrammaticChartMove else { return }
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, !isChartDragging, !isProgrammaticChartMove else { return }
+            snapScrollToBoundary()
         }
     }
 
@@ -228,6 +245,7 @@ struct HistoryView: View {
             .pickerStyle(.segmented)
             .padding(.horizontal)
             .onChange(of: range) { _, newRange in
+                beginProgrammaticChartMove()
                 selectedDate = nil
                 rebuildDerived()
                 retargetScroll(to: newRange)
@@ -342,6 +360,14 @@ struct HistoryView: View {
         .chartScrollPosition(x: $scrollX)
         .chartScrollTargetBehavior(scrollBehavior)
         .chartXSelection(value: $selectedDate)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 5)
+                .onChanged { _ in isChartDragging = true }
+                .onEnded { _ in
+                    isChartDragging = false
+                    snapGeneration &+= 1
+                }
+        )
         // Recreate the chart when the range changes: the scroll target behavior
         // is captured by the underlying scroll view and doesn't update in place,
         // so without this the previous range's snap rule stays active.
@@ -387,22 +413,56 @@ struct HistoryView: View {
         return "\(start.formatted(.dateTime.month(.abbreviated).day())) – \(end.formatted(.dateTime.month(.abbreviated).day()))"
     }
 
-    /// Lands scroll deceleration on week-start boundaries (the locale's first
-    /// weekday) for every range. `limitBehavior: .never` preserves fling
-    /// momentum — `.automatic` limits travel distance in compact width, which
-    /// is what made an earlier `majorAlignment` experiment feel paged/slow.
-    ///
-    /// M deliberately snaps to week starts, not month starts: month-boundary
-    /// targets are ~30 days apart, and after a free-momentum deceleration the
-    /// chart won't correct across up to half a screen, so it rests on a day
-    /// boundary instead (verified empirically). Week starts also line up with
-    /// M's weekly axis gridlines. 6M's weekly-averaged points sit exactly on
-    /// week starts, so the same alignment fits there too.
+    /// Preserve native deceleration and first land on a calendar day. The
+    /// post-deceleration correction below applies the coarser range boundary.
     private var scrollBehavior: ValueAlignedChartScrollTargetBehavior {
         .valueAligned(
-            matching: DateComponents(hour: 0, weekday: calendar.firstWeekday),
+            matching: DateComponents(hour: 0),
             limitBehavior: .never
         )
+    }
+
+    /// W and M align with weekly grid lines; 6M aligns to month starts. The
+    /// first/last loaded-data positions remain valid targets at the edges.
+    private func snapScrollToBoundary() {
+        let proposed = calendar.startOfDay(for: scrollX)
+        let interval: DateInterval?
+        switch range {
+        case .week, .month:
+            interval = calendar.dateInterval(of: .weekOfYear, for: proposed)
+        case .sixMonths:
+            interval = calendar.dateInterval(of: .month, for: proposed)
+        }
+        guard let interval else { return }
+
+        let lowerDistance = abs(proposed.timeIntervalSince(interval.start))
+        let upperDistance = abs(interval.end.timeIntervalSince(proposed))
+        var snapped = lowerDistance <= upperDistance ? interval.start : interval.end
+
+        let lastDay = calendar.startOfDay(for: rawPoints.last?.date ?? Date())
+        snapped = min(snapped, startDay(endingAt: lastDay, in: range))
+        if let firstDay = rawPoints.first?.date {
+            snapped = max(snapped, calendar.startOfDay(for: firstDay))
+        }
+
+        guard abs(snapped.timeIntervalSince(scrollX)) >= 60 else { return }
+        withAnimation(.easeOut(duration: 0.2)) {
+            scrollX = snapped
+        }
+    }
+
+    /// Chart recreation and bound scroll updates can arrive over several run
+    /// loop turns. Keep them out of the user-scroll debounce so changing W / M
+    /// / 6M preserves the shared trailing-day anchor exactly.
+    private func beginProgrammaticChartMove() {
+        programmaticMoveGeneration &+= 1
+        let generation = programmaticMoveGeneration
+        isProgrammaticChartMove = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard generation == programmaticMoveGeneration else { return }
+            isProgrammaticChartMove = false
+        }
     }
 
     private func resetScroll() {
