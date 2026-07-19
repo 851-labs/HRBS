@@ -34,6 +34,10 @@ struct HistoryView: View {
 
     @State private var range: TrendRange = .week
     @State private var scrollX = Calendar.current.startOfDay(for: Date())
+    /// Inclusive trailing day shared by every range. `scrollX` is derived from
+    /// this when the bucket changes, so W / M / 6M never keep independent
+    /// positions.
+    @State private var anchorDay = Calendar.current.startOfDay(for: Date())
     @State private var selectedDate: Date?
 
     /// Oldest day we've queried so far; older chunks load as you scroll back.
@@ -68,10 +72,17 @@ struct HistoryView: View {
             ? Self.weeklyAveraged(rawPoints, calendar: calendar)
             : rawPoints
 
-        if let first = displayPoints.first?.date, let last = displayPoints.last?.date, first < last {
-            xDomain = first...last
+        // The scroll extent comes from the raw daily data, not the transformed
+        // points. In 6M, `displayPoints.last` is a week start and would otherwise
+        // move the chart's effective trailing date backwards by up to six days.
+        if let firstRaw = rawPoints.first?.date, let lastRaw = rawPoints.last?.date {
+            let first = min(firstRaw, displayPoints.first?.date ?? firstRaw)
+            let end = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: lastRaw)) ?? lastRaw
+            xDomain = first...max(first, end)
         } else {
-            xDomain = (calendar.date(byAdding: .day, value: -(range.visibleDays - 1), to: today) ?? today)...today
+            let start = calendar.date(byAdding: .day, value: -(range.visibleDays - 1), to: today) ?? today
+            let end = calendar.date(byAdding: .day, value: 1, to: today) ?? today
+            xDomain = start...end
         }
 
         let values = displayPoints.map(\.bpm)
@@ -178,6 +189,7 @@ struct HistoryView: View {
             resetScroll()
         }
         .onChange(of: scrollX) {
+            anchorDay = trailingDay(for: scrollX, in: range)
             updateRenderWindowIfNeeded()
             loadOlderIfNeeded()
         }
@@ -215,10 +227,10 @@ struct HistoryView: View {
             }
             .pickerStyle(.segmented)
             .padding(.horizontal)
-            .onChange(of: range) {
+            .onChange(of: range) { _, newRange in
                 selectedDate = nil
                 rebuildDerived()
-                resetScroll()
+                retargetScroll(to: newRange)
             }
 
             VStack(alignment: .leading, spacing: 14) {
@@ -354,7 +366,12 @@ struct HistoryView: View {
 
     private var visibleSlice: ArraySlice<HeartRateTrendPoint> {
         let low = Self.lowerBound(displayPoints, scrollX)
-        let high = Self.lowerBound(displayPoints, scrollX.addingTimeInterval(range.visibleSeconds))
+        let end = calendar.date(
+            byAdding: .day,
+            value: range.visibleDays,
+            to: calendar.startOfDay(for: scrollX)
+        ) ?? scrollX.addingTimeInterval(range.visibleSeconds)
+        let high = Self.lowerBound(displayPoints, end)
         return displayPoints[low..<high]
     }
 
@@ -365,8 +382,8 @@ struct HistoryView: View {
     }
 
     private var visibleRangeLabel: String {
-        let end = scrollX.addingTimeInterval(range.visibleSeconds - 86_400)
-        let start = scrollX
+        let start = calendar.startOfDay(for: scrollX)
+        let end = trailingDay(for: start, in: range)
         return "\(start.formatted(.dateTime.month(.abbreviated).day())) – \(end.formatted(.dateTime.month(.abbreviated).day()))"
     }
 
@@ -389,8 +406,38 @@ struct HistoryView: View {
     }
 
     private func resetScroll() {
-        let lastDay = calendar.startOfDay(for: displayPoints.last?.date ?? Date())
-        scrollX = calendar.date(byAdding: .day, value: -(range.visibleDays - 1), to: lastDay) ?? lastDay
+        let lastDay = calendar.startOfDay(for: rawPoints.last?.date ?? Date())
+        anchorDay = lastDay
+        scrollX = startDay(endingAt: anchorDay, in: range)
+        updateRenderWindowIfNeeded(force: true)
+    }
+
+    private func trailingDay(for start: Date, in range: TrendRange) -> Date {
+        calendar.date(byAdding: .day, value: range.visibleDays - 1, to: calendar.startOfDay(for: start))
+            ?? calendar.startOfDay(for: start)
+    }
+
+    private func startDay(endingAt end: Date, in range: TrendRange) -> Date {
+        calendar.date(byAdding: .day, value: -(range.visibleDays - 1), to: calendar.startOfDay(for: end))
+            ?? calendar.startOfDay(for: end)
+    }
+
+    /// Retargets the new bucket around the shared inclusive trailing day.
+    /// Clamping only happens when the requested window exceeds loaded data.
+    private func retargetScroll(to newRange: TrendRange) {
+        var newStart = startDay(endingAt: anchorDay, in: newRange)
+
+        // Use raw data for both bounds. Weekly aggregation must not change the
+        // anchor when entering or leaving 6M.
+        let lastDay = calendar.startOfDay(for: rawPoints.last?.date ?? Date())
+        let latestStart = startDay(endingAt: lastDay, in: newRange)
+        newStart = min(newStart, latestStart)
+        if let firstDay = rawPoints.first?.date {
+            newStart = max(newStart, calendar.startOfDay(for: firstDay))
+        }
+
+        scrollX = newStart
+        anchorDay = trailingDay(for: newStart, in: newRange)
         updateRenderWindowIfNeeded(force: true)
     }
 
