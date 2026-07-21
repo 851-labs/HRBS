@@ -1,29 +1,6 @@
 import SwiftUI
 import Charts
 
-/// The bucket size for the trends chart, mirroring Apple Health's W / M / 6M.
-enum TrendRange: String, CaseIterable, Identifiable {
-    case week = "W"
-    case month = "M"
-    case sixMonths = "6M"
-
-    var id: String { rawValue }
-
-    /// Number of days visible at once.
-    var visibleDays: Int {
-        switch self {
-        case .week: return 7
-        case .month: return 30
-        case .sixMonths: return 182
-        }
-    }
-
-    var visibleSeconds: TimeInterval { Double(visibleDays) * 86_400 }
-
-    /// Aggregates daily readings into weekly averages for the 6-month view.
-    var aggregatesWeekly: Bool { self == .sixMonths }
-}
-
 /// The "Trends" tab: pre-sleep heart rate (HRBS) over time, styled like the
 /// Apple Health detail charts — scrollable/paged history, drag-to-scrub
 /// tooltips, and a W / M / 6M range selector.
@@ -39,7 +16,6 @@ struct HistoryView: View {
     /// positions.
     @State private var anchorDay = Calendar.current.startOfDay(for: Date())
     @State private var selectedDate: Date?
-    @State private var isChartDragging = false
     @State private var snapGeneration = 0
     @State private var isProgrammaticChartMove = false
     @State private var programmaticMoveGeneration = 0
@@ -194,20 +170,23 @@ struct HistoryView: View {
             resetScroll()
         }
         .onChange(of: scrollX) {
-            anchorDay = trailingDay(for: scrollX, in: range)
+            if clampScrollToLoadedDataIfNeeded() { return }
+            if !isProgrammaticChartMove {
+                anchorDay = trailingDay(for: scrollX, in: range)
+            }
             updateRenderWindowIfNeeded()
             loadOlderIfNeeded()
-            if !isChartDragging, !isProgrammaticChartMove {
+            if !isProgrammaticChartMove {
                 snapGeneration &+= 1
             }
         }
-        // Swift Charts does not expose its internal scroll phase here. Every
-        // deceleration tick cancels the previous task, leaving only the final
-        // resting position to be aligned.
+        // Fallback for momentum events that Swift Charts does not surface to
+        // the simultaneous drag gesture. Continuous deceleration keeps
+        // cancelling this task, so only its resting position is corrected.
         .task(id: snapGeneration) {
-            guard !isLoading, !isChartDragging, !isProgrammaticChartMove else { return }
-            try? await Task.sleep(for: .milliseconds(180))
-            guard !Task.isCancelled, !isChartDragging, !isProgrammaticChartMove else { return }
+            guard !isLoading, !isProgrammaticChartMove else { return }
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled, !isProgrammaticChartMove else { return }
             snapScrollToBoundary()
         }
     }
@@ -362,10 +341,8 @@ struct HistoryView: View {
         .chartXSelection(value: $selectedDate)
         .simultaneousGesture(
             DragGesture(minimumDistance: 5)
-                .onChanged { _ in isChartDragging = true }
                 .onEnded { _ in
-                    isChartDragging = false
-                    snapGeneration &+= 1
+                    snapScrollToBoundary()
                 }
         )
         // Recreate the chart when the range changes: the scroll target behavior
@@ -413,8 +390,8 @@ struct HistoryView: View {
         return "\(start.formatted(.dateTime.month(.abbreviated).day())) – \(end.formatted(.dateTime.month(.abbreviated).day()))"
     }
 
-    /// Preserve native deceleration and first land on a calendar day. The
-    /// post-deceleration correction below applies the coarser range boundary.
+    /// Keep native momentum fluid between calendar days; the coarser bucket
+    /// boundary is applied immediately when the drag ends.
     private var scrollBehavior: ValueAlignedChartScrollTargetBehavior {
         .valueAligned(
             matching: DateComponents(hour: 0),
@@ -425,41 +402,56 @@ struct HistoryView: View {
     /// W and M align with weekly grid lines; 6M aligns to month starts. The
     /// first/last loaded-data positions remain valid targets at the edges.
     private func snapScrollToBoundary() {
-        let proposed = calendar.startOfDay(for: scrollX)
-        let interval: DateInterval?
-        switch range {
-        case .week, .month:
-            interval = calendar.dateInterval(of: .weekOfYear, for: proposed)
-        case .sixMonths:
-            interval = calendar.dateInterval(of: .month, for: proposed)
-        }
-        guard let interval else { return }
-
-        let lowerDistance = abs(proposed.timeIntervalSince(interval.start))
-        let upperDistance = abs(interval.end.timeIntervalSince(proposed))
-        var snapped = lowerDistance <= upperDistance ? interval.start : interval.end
-
+        guard let firstDay = rawPoints.first?.date else { return }
         let lastDay = calendar.startOfDay(for: rawPoints.last?.date ?? Date())
-        snapped = min(snapped, startDay(endingAt: lastDay, in: range))
-        if let firstDay = rawPoints.first?.date {
-            snapped = max(snapped, calendar.startOfDay(for: firstDay))
-        }
+        let snapped = TrendViewportMath.snappedStart(
+            proposedStart: scrollX,
+            range: range,
+            firstDay: firstDay,
+            lastDay: lastDay,
+            calendar: calendar
+        )
 
         guard abs(snapped.timeIntervalSince(scrollX)) >= 60 else { return }
-        withAnimation(.easeOut(duration: 0.2)) {
+        beginProgrammaticChartMove()
+        anchorDay = trailingDay(for: snapped, in: range)
+        withAnimation(.smooth(duration: 0.42)) {
             scrollX = snapped
         }
     }
 
-    /// Chart recreation and bound scroll updates can arrive over several run
-    /// loop turns. Keep them out of the user-scroll debounce so changing W / M
-    /// / 6M preserves the shared trailing-day anchor exactly.
+    /// Swift Charts can briefly propose a leading edge beyond its Date domain
+    /// during a fast fling. Correct that on the bound value itself so neither
+    /// the header nor a subsequent bucket switch can retain an empty future or
+    /// pre-history viewport.
+    @discardableResult
+    private func clampScrollToLoadedDataIfNeeded() -> Bool {
+        guard let firstDay = rawPoints.first?.date, let lastDay = rawPoints.last?.date else { return false }
+        let clamped = TrendViewportMath.clampedStart(
+            scrollX,
+            range: range,
+            firstDay: firstDay,
+            lastDay: lastDay,
+            calendar: calendar
+        )
+        guard abs(clamped.timeIntervalSince(scrollX)) >= 60 else { return false }
+
+        beginProgrammaticChartMove()
+        anchorDay = trailingDay(for: clamped, in: range)
+        withAnimation(.smooth(duration: 0.42)) {
+            scrollX = clamped
+        }
+        return true
+    }
+
+    /// Suppress the idle fallback while the chart is being retargeted or the
+    /// snap animation itself is running.
     private func beginProgrammaticChartMove() {
         programmaticMoveGeneration &+= 1
         let generation = programmaticMoveGeneration
         isProgrammaticChartMove = true
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(350))
+            try? await Task.sleep(for: .milliseconds(480))
             guard generation == programmaticMoveGeneration else { return }
             isProgrammaticChartMove = false
         }
@@ -473,28 +465,25 @@ struct HistoryView: View {
     }
 
     private func trailingDay(for start: Date, in range: TrendRange) -> Date {
-        calendar.date(byAdding: .day, value: range.visibleDays - 1, to: calendar.startOfDay(for: start))
-            ?? calendar.startOfDay(for: start)
+        TrendViewportMath.trailingDay(for: start, range: range, calendar: calendar)
     }
 
     private func startDay(endingAt end: Date, in range: TrendRange) -> Date {
-        calendar.date(byAdding: .day, value: -(range.visibleDays - 1), to: calendar.startOfDay(for: end))
-            ?? calendar.startOfDay(for: end)
+        TrendViewportMath.startDay(endingAt: end, range: range, calendar: calendar)
     }
 
     /// Retargets the new bucket around the shared inclusive trailing day.
     /// Clamping only happens when the requested window exceeds loaded data.
     private func retargetScroll(to newRange: TrendRange) {
-        var newStart = startDay(endingAt: anchorDay, in: newRange)
-
-        // Use raw data for both bounds. Weekly aggregation must not change the
-        // anchor when entering or leaving 6M.
+        guard let firstDay = rawPoints.first?.date else { return }
         let lastDay = calendar.startOfDay(for: rawPoints.last?.date ?? Date())
-        let latestStart = startDay(endingAt: lastDay, in: newRange)
-        newStart = min(newStart, latestStart)
-        if let firstDay = rawPoints.first?.date {
-            newStart = max(newStart, calendar.startOfDay(for: firstDay))
-        }
+        let newStart = TrendViewportMath.retargetedStart(
+            anchorDay: anchorDay,
+            range: newRange,
+            firstDay: firstDay,
+            lastDay: lastDay,
+            calendar: calendar
+        )
 
         scrollX = newStart
         anchorDay = trailingDay(for: newStart, in: newRange)

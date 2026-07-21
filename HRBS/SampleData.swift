@@ -77,16 +77,27 @@ enum SampleDataProvider {
     }
 
     /// Pre-sleep heart rate for each night in `fromDay...toDay`, oldest first.
-    /// Simulated history only goes back ~400 days so the "load more" path can
-    /// reach an end.
+    /// The simulator exposes five deterministic years with realistic gaps and
+    /// occasional outliers so incremental loading and sparse charts get regular
+    /// exercise during development.
     static func heartRateTrend(from fromDay: Date, to toDay: Date, calendar: Calendar = .current) -> [HeartRateTrendPoint] {
         let today = calendar.startOfDay(for: Date())
-        let floor = calendar.date(byAdding: .day, value: -400, to: today) ?? today
+        let floor = calendar.date(byAdding: .year, value: -5, to: today) ?? today
 
         var result: [HeartRateTrendPoint] = []
-        var day = fromDay
+        var day = calendar.startOfDay(for: fromDay)
         while day <= toDay {
-            if day >= floor, day <= today, let bpm = data(for: day, calendar: calendar).heartRate?.bpm {
+            let offset = calendar.dateComponents([.day], from: floor, to: day).day ?? 0
+            let dayInSyntheticYear = ((offset % 365) + 365) % 365
+            let routineGap = offset % 19 == 0
+            let deviceOutage = (205...215).contains(dayInSyntheticYear) && offset / 365 % 2 == 1
+
+            if day >= floor, day <= today, !routineGap, !deviceOutage,
+               let baseline = data(for: day, calendar: calendar).heartRate?.bpm {
+                let seasonal = Int((sin(Double(offset) * 2 * .pi / 365.2425) * 3).rounded())
+                let longWave = Int((sin(Double(offset) * 2 * .pi / 911) * 2).rounded())
+                let outlier = offset % 173 == 0 ? 11 : (offset % 227 == 0 ? -8 : 0)
+                let bpm = min(88, max(40, baseline + seasonal + longWave + outlier))
                 result.append(HeartRateTrendPoint(date: day, bpm: bpm))
             }
             guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }

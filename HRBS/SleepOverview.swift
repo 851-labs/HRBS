@@ -115,9 +115,15 @@ private struct StageBar: View {
                     }
                     .frame(height: barHeight)
 
-                shape
-                    .fill(stage.color)
-                    .frame(width: max(width * fraction, barHeight * 0.6), height: barHeight)
+                UnevenRoundedRectangle(
+                    topLeadingRadius: barCornerRadius,
+                    bottomLeadingRadius: barCornerRadius,
+                    bottomTrailingRadius: 0,
+                    topTrailingRadius: 0,
+                    style: .continuous
+                )
+                .fill(stage.color)
+                .frame(width: max(width * fraction, barHeight * 0.6), height: barHeight)
 
                 if let optimal {
                     OptimalRangeWindow()
