@@ -19,9 +19,9 @@ struct HeartRateCard: View {
             if let reading {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text("\(reading.bpm)")
-                        .font(.system(size: 46, weight: .bold, design: .rounded))
+                        .font(.system(size: 34, weight: .bold, design: .rounded))
                     Text("BPM")
-                        .font(.title3.weight(.semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
 
@@ -31,10 +31,10 @@ struct HeartRateCard: View {
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text("—")
-                        .font(.system(size: 46, weight: .bold, design: .rounded))
+                        .font(.system(size: 34, weight: .bold, design: .rounded))
                         .foregroundStyle(.secondary)
                     Text("BPM")
-                        .font(.title3.weight(.semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
                 Text("No heart rate recorded before sleep")
