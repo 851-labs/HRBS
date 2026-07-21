@@ -6,26 +6,31 @@
 import Foundation
 import SwiftUI
 
-/// Constants used by the vendored SleepChartKit timeline graph.
+/// Scale-independent geometry tuned against Apple Health's sleep-stage chart.
 public enum SleepChartConstants {
-    /// Number of sleep stage rows in the timeline. Local change: 5 -> 4, since
-    /// the app collapses "unspecified" into core and never shows an "in bed"
-    /// lane, so four lanes (Awake/REM/Core/Deep) fill the height like Apple.
     public static let stageRowCount: CGFloat = 4
+    public static let bandHeightRatio: CGFloat = 0.51
+    public static let minimumBarWidth: CGFloat = 2.5
+    public static let cornerRadiusRatio: CGFloat = 0.13
+    public static let maximumCornerRadius: CGFloat = 4
 
-    /// Minimum width for sleep stage bars to ensure visibility.
-    public static let minimumBarWidth: CGFloat = 1
+    public static let transitionBloomWidth: CGFloat = 2.65
+    public static let transitionCoreWidth: CGFloat = 1.5
+    public static let transitionBloomOpacity: CGFloat = 0.05
+    public static let transitionCoreOpacity: CGFloat = 0.23
+    public static let transitionSideRecenterRatio: CGFloat = 0.55
+    public static let transitionUpperShoulderDepth: CGFloat = 3
+    public static let transitionLowerShoulderDepth: CGFloat = 2
+    public static let transitionShoulderExpansion: CGFloat = 2
+    public static let transitionLowerShoulderExpansion: CGFloat = 2.5
+    public static let transitionLowerShoulderLead: CGFloat = 0.75
+    public static let awakeShoulderHold: CGFloat = 1.25
 
-    /// Corner radius ratio for sleep stage bars (bar height / ratio).
-    public static let barCornerRadiusRatio: CGFloat = 6
+    public static let blockGlowOpacity: CGFloat = 0.70
+    public static let blockGlowRadius: CGFloat = 0.6
+    public static let blockRimOpacity: CGFloat = 0.55
+    public static let blockRimWidth: CGFloat = 0.9
 
-    /// Line width for stage connector curves.
-    public static let connectorLineWidth: CGFloat = 1.5
-
-    /// Opacity for stage connector curves.
-    public static let connectorOpacity: CGFloat = 0.4
-
-    /// Control point ratios for connector curve smoothness.
-    public static let connectorControlPointRatio1: CGFloat = 0.3
-    public static let connectorControlPointRatio2: CGFloat = 0.7
+    public static let maximumMergedGap: TimeInterval = 30
+    public static let maximumConnectedGap: TimeInterval = 90
 }

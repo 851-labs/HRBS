@@ -21,7 +21,7 @@ struct SleepCard: View {
             SleepMetricsGrid(session: session, baseline: baseline)
 
             SleepStagesChart(session: session)
-                .frame(height: 150)
+                .frame(height: 209)
                 .padding(.top, 10)
 
             SleepOverview(session: session, age: age)
@@ -31,13 +31,12 @@ struct SleepCard: View {
     }
 }
 
-/// The sleep-stage timeline. The ribbon itself is rendered by the vendored
-/// SleepChartKit `SleepTimelineGraph` (see ThirdParty/SleepChartKit); we wrap it
-/// with our own hour-based dotted axis and feed it our app's stage colors.
+/// Apple Health-style sleep-stage timeline with an hourly dotted grid, exact
+/// bed/wake endpoints, and a custom gradient ribbon renderer.
 struct SleepStagesChart: View {
     let session: SleepSession
 
-    private let axisHeight: CGFloat = 18
+    private let axisHeight: CGFloat = 22
 
     private var samples: [SleepSample] {
         session.segments.map {
@@ -49,11 +48,9 @@ struct SleepStagesChart: View {
         GeometryReader { geo in
             let plotHeight = geo.size.height - axisHeight
             ZStack(alignment: .top) {
-                // Our dotted hour gridlines + labels behind the ribbon.
                 Canvas { context, size in
                     drawTimeAxis(context, size: size, plotHeight: plotHeight)
                 }
-                // The vendored SleepChartKit ribbon, tinted with our colors.
                 SleepTimelineGraph(samples: samples, colorProvider: HRBSSleepColorProvider())
                     .frame(height: plotHeight)
             }
@@ -68,55 +65,68 @@ struct SleepStagesChart: View {
 
         let calendar = Calendar.current
 
-        // Interior gridlines every two hours, aligned to the clock.
+        // Apple uses an hourly dotted grid but labels only even hours.
         var ticks: [Date] = []
         var comps = calendar.dateComponents([.year, .month, .day, .hour], from: start)
-        if let hour = comps.hour {
-            comps.hour = hour - (hour % 2) + 2
-            comps.minute = 0
-            comps.second = 0
-            if var tick = calendar.date(from: comps) {
-                while tick < end {
-                    ticks.append(tick)
-                    guard let next = calendar.date(byAdding: .hour, value: 2, to: tick) else { break }
-                    tick = next
-                }
+        comps.minute = 0
+        comps.second = 0
+        if let rounded = calendar.date(from: comps),
+           var tick = calendar.date(byAdding: .hour, value: 1, to: rounded) {
+            while tick < end {
+                ticks.append(tick)
+                guard let next = calendar.date(byAdding: .hour, value: 1, to: tick) else { break }
+                tick = next
             }
         }
 
         for tick in ticks {
             let gx = x(tick)
             var line = Path()
-            line.move(to: CGPoint(x: gx, y: 0))
-            line.addLine(to: CGPoint(x: gx, y: plotHeight))
+            line.move(to: CGPoint(x: gx, y: 4.5))
+            line.addLine(to: CGPoint(x: gx, y: max(4.5, plotHeight - 10)))
             context.stroke(
                 line,
-                with: .color(.gray.opacity(0.18)),
-                style: StrokeStyle(lineWidth: 1, dash: [2, 3])
+                with: .color(.secondary.opacity(0.25)),
+                style: StrokeStyle(lineWidth: 1, dash: [1, 3])
             )
         }
 
-        // Only label the interior hour ticks; the full bed/wake range is already
-        // shown in the card header, which avoids labels colliding at the edges.
-        let labelY = plotHeight + axisHeight / 2
-        for tick in ticks {
-            let text = Text(tick.formatted(date: .omitted, time: .shortened))
+        // Apple's glyph bounds begin almost immediately below the plot. The
+        // resolved text's center sits about 27% into the reserved axis band.
+        let labelY = plotHeight + axisHeight * 0.27
+        let labelStyle = Date.FormatStyle(date: .omitted, time: .shortened)
+
+        let startText = Text(start.formatted(labelStyle))
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        context.draw(startText, at: CGPoint(x: 0, y: labelY), anchor: .leading)
+
+        let endText = Text(end.formatted(labelStyle))
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        context.draw(endText, at: CGPoint(x: size.width, y: labelY), anchor: .trailing)
+
+        for tick in ticks where calendar.component(.hour, from: tick).isMultiple(of: 2) {
+            let tickX = x(tick)
+            // Keep exact endpoint labels readable on short sessions.
+            guard tickX > 50, tickX < size.width - 50 else { continue }
+            let text = Text(tick.formatted(labelStyle))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            context.draw(text, at: CGPoint(x: x(tick), y: labelY), anchor: .center)
+            context.draw(text, at: CGPoint(x: tickX, y: labelY), anchor: .center)
         }
     }
 }
 
-/// Bridges the vendored `SleepStageColorProvider` to the app's own stage colors.
+/// Supplies colors sampled from the Apple Health sleep-stage palette.
 private struct HRBSSleepColorProvider: SleepStageColorProvider {
     func color(for stage: SleepChartStage) -> Color {
         switch stage {
-        case .awake: return SleepStage.awake.color
-        case .asleepREM: return SleepStage.rem.color
-        case .asleepCore: return SleepStage.core.color
-        case .asleepDeep: return SleepStage.deep.color
-        case .asleepUnspecified: return SleepStage.core.color
+        case .awake: return Color(red: 248 / 255, green: 139 / 255, blue: 73 / 255)
+        case .asleepREM: return Color(red: 128 / 255, green: 201 / 255, blue: 255 / 255)
+        case .asleepCore: return Color(red: 93 / 255, green: 154 / 255, blue: 239 / 255)
+        case .asleepDeep: return Color(red: 116 / 255, green: 75 / 255, blue: 207 / 255)
+        case .asleepUnspecified: return Color(red: 93 / 255, green: 154 / 255, blue: 239 / 255)
         case .inBed: return .gray
         }
     }
